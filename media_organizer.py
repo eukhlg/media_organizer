@@ -170,155 +170,6 @@ def backup_existing_log(log_path):
             break
         i += 1
 
-def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
-    """Processes individual media files, handling metadata extraction and duplicate resolution."""
-
-    # Check if source file exists
-    # This is required for multi-threading
-    if not src_file.exists():
-        print(f"[!] Source file no longer exists: {src_file}")
-        return
-    
-    ext = src_file.suffix.lower()[1:]
-    base_name = src_file.name
-    json_file = src_file.with_name(src_file.stem + '.json')
-    thm_file = src_file.with_suffix('.THM')
-
-    # Determine the best possible date/time
-    exif_date = None
-    methods_used = []
-
-    # Try getting EXIF data first
-    tag = 'DateTimeOriginal' if ext in MEDIA_EXTENSIONS['image'] else 'CreateDate'
-    exif_date = get_exif_date(src_file, tag)
-
-    # Try extracting date from filename
-    filename_date = extract_date_from_filename(base_name)
-
-    if exif_date and not re.match(r'0000[-:]00[-:]00 00:00:00', exif_date):
-        methods_used.append("EXIF")
-    # Check for associated JSON metadata
-    elif json_file.exists():
-        print(f"[!] No date found for {src_file}, falling back to JSON file")
-        json_date = parse_json_metadata(json_file)
-        if json_date:
-            exif_date = json_date
-            methods_used.append("JSON")
-            print(f"[+] Using JSON date for {src_file}: {exif_date}")
-    # Check for associated thumbnail metadata
-    elif thm_file.exists():
-        print(f"[!] No date found for {src_file}, falling back to thumbnail file")
-        thm_date = get_exif_date(thm_file, 'CreateDate')
-        if thm_date:
-            exif_date = thm_date
-            methods_used.append("THM")
-            print(f"[+] Using THM date for {src_file}: {exif_date}")
-    # Check filename pattern matching
-    elif filename_date:
-        print(f"[!] No date found for {src_file}, falling back to filename date")
-        exif_date = filename_date
-        methods_used.append("Filename")
-        print(f"[+] Using filename date for {src_file}: {exif_date}")
-    # Fall back to file's last modified time if needed
-    else:
-        if fallback_to_mtime:
-            print(f"[!] No date found for {src_file}, falling back to mtime")
-            exif_date = datetime.fromtimestamp(src_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            methods_used.append("FALLBACK (MTIME)")
-        else:
-            print(f"[!] Skipping: {src_file} (no valid date)")
-            return
-
-  
-    # Create destination paths
-    year, month = exif_date.split('-')[:2]
-    dest_dir = target_root / year / month
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    month_log_file = dest_dir / "media_organizer.log"
-
-    # Target file path setup
-    tgt_file = dest_dir / base_name
-    if re.search(r'[А-Яа-я]', base_name):
-        tgt_file = dest_dir / transliterate_ru_to_en(base_name)
-
-    # Backup existing log file if present
-    if month_log_file.exists():
-        backup_existing_log(month_log_file)
-
-    # Resolve potential duplicate file issues
-    if tgt_file.exists():
-        if not src_file.exists():
-            print(f"[!] Source file no longer exists: {src_file}")
-            return
-        if src_file.stat().st_size != tgt_file.stat().st_size:
-            # Different sizes, handle it by renaming
-            tgt_file = resolve_conflict(src_file, dest_dir)
-        else:
-            # Same size, check hash
-            src_hash = sha256sum_file(src_file)
-            tgt_hash = sha256sum_file(tgt_file)
-            if src_hash == tgt_hash:
-                if remove_duplicates:
-                    # Check if source file exists before unlinking
-                    # This is required for multi-threading
-                    try:
-                        src_file.unlink()
-                        print(f"[=] Identical: {base_name} (removed)")
-                    except FileNotFoundError:
-                        pass
-                    except Exception as e:
-                        print(f"[!] Error removing duplicate: {e}")
-                else:
-                    print(f"[=] Identical: {base_name} (skipped)")
-                return
-            else:
-                # Hash mismatch, create a copy with unique name
-                suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
-                new_name = f"{src_file.stem}_copy_{suffix}{src_file.suffix}"
-                tgt_file = dest_dir / new_name
-                print(f"[!] Conflict: {base_name} → {new_name}")
-
-    # Move or simulate move operation
-    if preview:
-        print(f"[+] Would move: {base_name} → {year}/{month}/{tgt_file.name}")
-        if thm_file.exists():
-            print(f"[+] Would move thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
-        if json_file.exists():
-            print(f"[+] Would move JSON: {json_file.name} → {year}/{month}/{json_file.name}")
-    else:
-        shutil.move(src_file, tgt_file)
-        log_move(global_log_file, month_log_file, str(src_file), str(tgt_file))
-        print(f"[+] Moved: {base_name} → {year}/{month}/{tgt_file.name}")
-        if thm_file.exists():
-            shutil.move(thm_file, dest_dir)
-            log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
-            print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
-        if json_file.exists():
-            shutil.move(json_file, dest_dir)
-            log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
-            print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
-
-def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, pwd=None):
-    """Main routine to organize media files recursively."""
-    global global_log_file
-
-    # Clean up previous logs
-    global_log_file = target_dir / "media_organizer.log"
-    global_log_file.unlink(missing_ok=True)
-
-    # Process archives first
-    if extract_archives:
-        extract_archives_in_place(source_dir, global_log_file, preview, pwd)
-
-    # Walk through directories and process each media file
-    valid_extensions = set(MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video'])
-    for src_file in source_dir.rglob('*'):
-        if src_file.is_file() and src_file.suffix.lower()[1:] in valid_extensions:
-            process_file(src_file, target_dir, preview, fallback_to_mtime, remove_duplicates)
-
-    # Remove empty directories
-    remove_empty_directories(source_dir)
-
 def extract_archives_in_place(folder, log_path, preview, pwd=None):
     """Recursively scans and extracts archives in place."""
     for archive in folder.rglob("*"):
@@ -351,6 +202,159 @@ def remove_empty_directories(start_path):
                 print(f"[x] Removed: {current_dir} (directory is empty)")
             except OSError as e:
                 print(f"[!] Error removing directory {current_dir}: {e}")
+
+def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, pwd=None):
+    """Main routine to organize media files recursively."""
+    global global_log_file
+
+    # Clean up previous logs
+    global_log_file = target_dir / "media_organizer.log"
+    global_log_file.unlink(missing_ok=True)
+
+    # Process archives first
+    if extract_archives:
+        extract_archives_in_place(source_dir, global_log_file, preview, pwd)
+
+    # Walk through directories and process each media file
+    valid_extensions = set(MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video'])
+    for src_file in source_dir.rglob('*'):
+        if src_file.is_file() and src_file.suffix.lower()[1:] in valid_extensions:
+            process_file(src_file, target_dir, preview, fallback_to_mtime, remove_duplicates)
+
+    # Remove empty directories
+    remove_empty_directories(source_dir)
+
+def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
+    """Processes individual media files, handling metadata extraction and duplicate resolution."""
+
+    ext = src_file.suffix.lower()[1:]
+    base_name = src_file.name
+    json_file = src_file.name + '.json'
+    thm_file = src_file.with_suffix('.THM')
+
+    try:
+        # Determine the best possible date/time
+        exif_date = None
+        methods_used = []
+
+        # Try getting EXIF data first
+        tag = 'DateTimeOriginal' if ext in MEDIA_EXTENSIONS['image'] else 'CreateDate'
+        exif_date = get_exif_date(src_file, tag)
+
+        # Try extracting date from filename
+        filename_date = extract_date_from_filename(base_name)
+
+        if exif_date and not re.match(r'0000[-:]00[-:]00 00:00:00', exif_date):
+            methods_used.append("EXIF")
+        # Check for associated JSON metadata
+        elif json_file.exists():
+            print(f"[!] No date found for {src_file}, falling back to JSON file")
+            json_date = parse_json_metadata(json_file)
+            if json_date:
+                exif_date = json_date
+                methods_used.append("JSON")
+                print(f"[+] Using JSON date for {src_file}: {exif_date}")
+        # Check for associated thumbnail metadata
+        elif thm_file.exists():
+            print(f"[!] No date found for {src_file}, falling back to thumbnail file")
+            thm_date = get_exif_date(thm_file, 'CreateDate')
+            if thm_date:
+                exif_date = thm_date
+                methods_used.append("THM")
+                print(f"[+] Using THM date for {src_file}: {exif_date}")
+        # Check filename pattern matching
+        elif filename_date:
+            print(f"[!] No date found for {src_file}, falling back to filename date")
+            exif_date = filename_date
+            methods_used.append("Filename")
+            print(f"[+] Using filename date for {src_file}: {exif_date}")
+        # Fall back to file's last modified time if needed
+        else:
+            if fallback_to_mtime:
+                print(f"[!] No date found for {src_file}, falling back to mtime")
+                exif_date = datetime.fromtimestamp(src_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                methods_used.append("FALLBACK (MTIME)")
+            else:
+                print(f"[!] Skipping: {src_file} (no valid date)")
+                return
+
+        if not exif_date or not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$', exif_date):
+            print(f"[!] Invalid or missing date for {src_file}, skipping.")
+            return
+
+    except Exception as e:
+        print(f"[!] Error processing file {src_file}: {e}")
+        return
+
+    try:
+        # Create destination paths
+        year, month = exif_date.split('-')[:2]
+        dest_dir = target_root / year / month
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        month_log_file = dest_dir / "media_organizer.log"
+
+        # Target file path setup
+        tgt_file = dest_dir / base_name
+        if re.search(r'[А-Яа-я]', base_name):
+            tgt_file = dest_dir / transliterate_ru_to_en(base_name)
+
+        # Backup existing log file if present
+        if month_log_file.exists():
+            backup_existing_log(month_log_file)
+
+        # Resolve potential duplicate file issues
+        if tgt_file.exists():
+            if src_file.stat().st_size != tgt_file.stat().st_size:
+                # Different sizes, handle it by renaming
+                tgt_file = resolve_conflict(src_file, dest_dir)
+            else:
+                # Same size, check hash
+                src_hash = sha256sum_file(src_file)
+                tgt_hash = sha256sum_file(tgt_file)
+                if src_hash == tgt_hash:
+                    if remove_duplicates:
+                        src_file.unlink()
+                        print(f"[=] Identical: {base_name} (removed)")
+                    else:
+                        print(f"[=] Identical: {base_name} (skipped)")
+                    return
+                else:
+                    # Hash mismatch, create a copy with unique name
+                    suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    new_name = f"{src_file.stem}_copy_{suffix}{src_file.suffix}"
+                    tgt_file = dest_dir / new_name
+                    print(f"[!] Conflict: {base_name} → {new_name}")
+    except Exception as e:
+        print(f"[!] Error creating file path: {e}")
+        return
+
+    print(f"Constructed JSON file name: {json_file}, exists: {json_file.exists()}")
+
+    try:
+        # Move or simulate move operation
+        if preview:
+            if base_name and tgt_file:
+                print(f"[+] Would move: {base_name} → {year}/{month}/{tgt_file.name}")
+            if thm_file.exists():
+                print(f"[+] Would move thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+            if json_file.exists():
+                print(f"[+] Would move JSON: {json_file.name} → {year}/{month}/{json_file.name}")
+        else:
+                if base_name and src_file.exists() and tgt_file:
+                    shutil.move(src_file, tgt_file)
+                    log_move(global_log_file, month_log_file, str(src_file), str(tgt_file))
+                    print(f"[+] Moved: {base_name} → {year}/{month}/{tgt_file.name}")
+                if thm_file.exists():
+                    shutil.move(thm_file, dest_dir)
+                    log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
+                    print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+                if json_file.exists():
+                    shutil.move(json_file, dest_dir)
+                    log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
+                    print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
+    except Exception as e:
+        print(f"[!] Error moving file {src_file}: {e}")
+        return
 
 def main():
     if len(sys.argv) < 3:
