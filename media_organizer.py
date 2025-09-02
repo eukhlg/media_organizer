@@ -192,7 +192,7 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         methods_used.append("EXIF")
     # Check for associated JSON metadata
     elif json_file.exists():
-        print(f"[!] No EXIF date found for {src_file}, falling back to JSON file")
+        print(f"[!] No date found for {src_file}, falling back to JSON file")
         json_date = parse_json_metadata(json_file)
         if json_date:
             exif_date = json_date
@@ -200,7 +200,7 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
             print(f"[+] Using JSON date for {src_file}: {exif_date}")
     # Check for associated thumbnail metadata
     elif thm_file.exists():
-        print(f"[!] No EXIF date found for {src_file}, falling back to thumbnail file")
+        print(f"[!] No date found for {src_file}, falling back to thumbnail file")
         thm_date = get_exif_date(thm_file, 'CreateDate')
         if thm_date:
             exif_date = thm_date
@@ -208,18 +208,18 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
             print(f"[+] Using THM date for {src_file}: {exif_date}")
     # Check filename pattern matching
     elif filename_date:
-        print(f"[!] No EXIF date found for {src_file}, falling back to filename date")
+        print(f"[!] No date found for {src_file}, falling back to filename date")
         exif_date = filename_date
         methods_used.append("Filename")
         print(f"[+] Using filename date for {src_file}: {exif_date}")
+    # Fall back to file's last modified time if needed
     else:
-        # Fall back to file's last modified time if needed
         if fallback_to_mtime:
-            print(f"[!] No filename date found for {src_file}, falling back to 'mtime'")
+            print(f"[!] No date found for {src_file}, falling back to mtime")
             exif_date = datetime.fromtimestamp(src_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
             methods_used.append("FALLBACK (MTIME)")
         else:
-            print(f"[!] No date found for {src_file}, skipping (no valid date)")
+            print(f"[!] Skipping: {src_file} (no valid date)")
             return
 
   
