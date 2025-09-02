@@ -172,6 +172,12 @@ def backup_existing_log(log_path):
 
 def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
     """Processes individual media files, handling metadata extraction and duplicate resolution."""
+
+    # Check if source file exists
+    if not src_file.exists():
+        print(f"[!] Source file no longer exists: {src_file}")
+        return
+    
     ext = src_file.suffix.lower()[1:]
     base_name = src_file.name
     json_file = src_file.with_name(src_file.stem + '.json')
@@ -240,6 +246,12 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
 
     # Resolve potential duplicate file issues
     if tgt_file.exists():
+        if not src_file.exists():
+            print(f"[!] Source file no longer exists: {src_file}")
+            return
+        if not tgt_file.exists():
+            print(f"[!] Target file no longer exists: {tgt_file}")
+            return
         if src_file.stat().st_size != tgt_file.stat().st_size:
             # Different sizes, handle it by renaming
             tgt_file = resolve_conflict(src_file, dest_dir)
