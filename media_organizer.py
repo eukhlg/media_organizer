@@ -71,16 +71,13 @@ def parse_json_metadata(json_file):
 
 def extract_date_from_filename(filename):
     """Extracts a date from the filename."""
-    # Find possible date in the format YYYYMMDD
-    matches = re.search(r'(\d{4}-\d{2}-\d{2}|\d{8})', filename)
+    # Find possible date in the format YYYYMMDD_HHMMSS
+    matches = re.search(r'(\d{8}_\d{6})', filename)
     if matches:
         date_part = matches.group(0)
         try:
-            # Try to convert the found date
-            if "-" in date_part:
-                dt_obj = datetime.strptime(date_part, "%Y-%m-%d")
-            else:
-                dt_obj = datetime.strptime(date_part, "%Y%m%d")
+            # Convert the found date and time
+            dt_obj = datetime.strptime(date_part, "%Y%m%d_%H%M%S")
             return dt_obj.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
             pass
@@ -147,7 +144,12 @@ def extract_archive(archive_path, output_folder, pwd=None):
                 pwd = getpass.getpass(f"Enter password for {archive_path}: ")
             else:
                 print(f"[!] Retrying with provided password for {archive_path}")
-            extract_archive_with_password(archive_path, output_folder, pwd)
+            if extract_archive_with_password(archive_path, output_folder, pwd):
+                print(f"[+] Successfully extracted {archive_path} with provided password.")
+                return True
+            else:
+                print(f"[!] Failed to extract {archive_path} with provided password.")
+                return False
     except Exception as e:
         print(f"[!] Extraction failed: {e}")
         return False
@@ -168,11 +170,11 @@ def backup_existing_log(log_path):
             break
         i += 1
 
-def process_file(src_file, target_root, preview=False, fallback_to_mtime=False):
+def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
     """Processes individual media files, handling metadata extraction and duplicate resolution."""
     ext = src_file.suffix.lower()[1:]
     base_name = src_file.name
-    json_file = src_file.with_name(src_file.stem + '.json')  # Исправляем здесь
+    json_file = src_file.with_name(src_file.stem + '.json')
     thm_file = src_file.with_suffix('.THM')
 
     # Determine the best possible date/time
@@ -182,43 +184,45 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False):
     # Try getting EXIF data first
     tag = 'DateTimeOriginal' if ext in MEDIA_EXTENSIONS['image'] else 'CreateDate'
     exif_date = get_exif_date(src_file, tag)
-    if exif_date:
-        methods_used.append("EXIF")
-    else:
-        print(f"[!] No EXIF date found for {src_file}, falling back to JSON file")
 
+    # Try extracting date from filename
+    filename_date = extract_date_from_filename(base_name)
+
+    if exif_date and not re.match(r'0000[-:]00[-:]00 00:00:00', exif_date):
+        methods_used.append("EXIF")
     # Check for associated JSON metadata
-    if json_file.exists():
+    elif json_file.exists():
+        print(f"[!] No EXIF date found for {src_file}, falling back to JSON file")
         json_date = parse_json_metadata(json_file)
         if json_date:
             exif_date = json_date
             methods_used.append("JSON")
-        else:
-            print(f"[!] No JSON date found for {json_file}, falling back to 'filename'")
-    else:
-        print(f"[!] No JSON file found, falling back to 'filename'")
-
+            print(f"[+] Using JSON date for {src_file}: {exif_date}")
+    # Check for associated thumbnail metadata
+    elif thm_file.exists():
+        print(f"[!] No EXIF date found for {src_file}, falling back to thumbnail file")
+        thm_date = get_exif_date(thm_file, 'CreateDate')
+        if thm_date:
+            exif_date = thm_date
+            methods_used.append("THM")
+            print(f"[+] Using THM date for {src_file}: {exif_date}")
     # Check filename pattern matching
-    filename_date = extract_date_from_filename(base_name)
-    if filename_date:
+    elif filename_date:
+        print(f"[!] No EXIF date found for {src_file}, falling back to filename date")
         exif_date = filename_date
         methods_used.append("Filename")
+        print(f"[+] Using filename date for {src_file}: {exif_date}")
     else:
+        # Fall back to file's last modified time if needed
         if fallback_to_mtime:
             print(f"[!] No filename date found for {src_file}, falling back to 'mtime'")
-        else:
-            print(f"[!] No filename date found for {src_file}, skipping (no valid date)")
-            return
-
-    # Fall back to file's last modified time if needed
-    if not exif_date or re.match(r'0000[-:]00[-:]00 00:00:00', exif_date):
-        if fallback_to_mtime:
             exif_date = datetime.fromtimestamp(src_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
             methods_used.append("FALLBACK (MTIME)")
         else:
-            print(f"[!] Skipping: {src_file} (no valid date)")
+            print(f"[!] No date found for {src_file}, skipping (no valid date)")
             return
 
+  
     # Create destination paths
     year, month = exif_date.split('-')[:2]
     dest_dir = target_root / year / month
@@ -271,7 +275,7 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False):
             log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
             print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
 
-def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, extract_archives=False, pwd=None):
+def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, pwd=None):
     """Main routine to organize media files recursively."""
     global global_log_file
 
@@ -287,7 +291,7 @@ def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=F
     valid_extensions = set(MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video'])
     for src_file in source_dir.rglob('*'):
         if src_file.is_file() and src_file.suffix.lower()[1:] in valid_extensions:
-            process_file(src_file, target_dir, preview, fallback_to_mtime)
+            process_file(src_file, target_dir, preview, fallback_to_mtime, remove_duplicates)
 
 def extract_archives_in_place(folder, log_path, preview, pwd=None):
     """Recursively scans and extracts archives in place."""
@@ -300,8 +304,10 @@ def extract_archives_in_place(folder, log_path, preview, pwd=None):
             if extractor:
                 if not preview:
                     print(f"[~] Unpacking {archive}...")
-                    extract_archive(archive, archive.parent, pwd)
-                    log_move(log_path, log_path, str(archive), f"Unpacked to {archive.parent}")
+                    if extract_archive(archive, archive.parent, pwd):
+                        log_move(log_path, log_path, str(archive), f"Unpacked to {archive.parent}")
+                        archive.unlink()  # Remove archive file
+                        print(f"[+] Removed archive file: {archive}")
                 else:
                     print(f"[~] Would unpack {archive}")
         except Exception as e:
@@ -345,7 +351,7 @@ def main():
         futures = []
         for root, _, _ in os.walk(source):
             dir_path = Path(root)
-            future = executor.submit(process_directory, dir_path, target, preview, fallback_to_mtime, extract_archives, pwd)
+            future = executor.submit(process_directory, dir_path, target, preview, fallback_to_mtime, remove_duplicates, extract_archives, pwd)
             futures.append(future)
         for future in futures:
             future.result()
