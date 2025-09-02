@@ -13,6 +13,7 @@ import tarfile
 import rarfile
 import json
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 # Media file extensions
 MEDIA_EXTENSIONS = {
@@ -61,12 +62,24 @@ def get_exif_date(file_path, tag):
     return result.stdout.strip()
 
 def parse_json_metadata(json_file):
-    """Parses JSON metadata to retrieve photo taken time."""
-    with open(json_file, 'r') as jf:
-        data = json.load(jf)
-        formatted_time = data.get('photoTakenTime', {}).get('formatted')
-        if formatted_time:
-            return datetime.strptime(formatted_time[:-4], "%d %b. %Y, %H:%M:%S").strftime("%Y-%m-%d %H:%M:%S")
+    """
+    Parses JSON metadata to retrieve the photo taken time from the 'timestamp'.
+    
+    :param json_file: Path to the JSON file containing metadata.
+    :return: Formatted date-time string or None if not found.
+    """
+    try:
+        with open(json_file, 'r') as jf:
+            data = json.load(jf)
+            # Extract the timestamp value
+            timestamp_value = data.get('photoTakenTime', {}).get('timestamp')
+            if timestamp_value is not None:
+                # Convert timestamp to datetime object
+                dt_object = datetime.fromtimestamp(int(timestamp_value))
+                # Return formatted date-time string
+                return dt_object.strftime('%Y-%m-%d %H:%M:%S')
+    except Exception as e:
+        print(f"Error parsing JSON: {e}")
     return None
 
 def extract_date_from_filename(filename):
@@ -205,11 +218,6 @@ def remove_empty_directories(start_path):
 
 def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, pwd=None):
     """Main routine to organize media files recursively."""
-    global global_log_file
-
-    # Clean up previous logs
-    global_log_file = target_dir / "media_organizer.log"
-    global_log_file.unlink(missing_ok=True)
 
     # Process archives first
     if extract_archives:
@@ -224,12 +232,21 @@ def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=F
     # Remove empty directories
     remove_empty_directories(source_dir)
 
+def process_directory_with_lock(source_dir, target_dir, lock, *args):
+    """Processes a directory with thread safety using a lock."""
+    # Lock used to ensure thread safety
+    with lock:
+        process_directory(source_dir, target_dir, *args)
+
 def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
     """Processes individual media files, handling metadata extraction and duplicate resolution."""
 
+    global global_log_file
+    global month_log_file_backup_created
+
     ext = src_file.suffix.lower()[1:]
     base_name = src_file.name
-    json_file = src_file.name + '.json'
+    json_file = Path(str(src_file) + '.json')
     thm_file = src_file.with_suffix('.THM')
 
     try:
@@ -299,8 +316,10 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
             tgt_file = dest_dir / transliterate_ru_to_en(base_name)
 
         # Backup existing log file if present
-        if month_log_file.exists():
+        if month_log_file.exists() and not month_log_file_backup_created:
             backup_existing_log(month_log_file)
+            month_log_file.unlink()
+            month_log_file_backup_created = True
 
         # Resolve potential duplicate file issues
         if tgt_file.exists():
@@ -328,7 +347,7 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         print(f"[!] Error creating file path: {e}")
         return
 
-    print(f"Constructed JSON file name: {json_file}, exists: {json_file.exists()}")
+    # print(f"Constructed JSON file name: {json_file}, exists: {json_file.exists()}")
 
     try:
         # Move or simulate move operation
@@ -389,12 +408,27 @@ def main():
 
     target.mkdir(parents=True, exist_ok=True)
 
+        # Set up global log file
+    global global_log_file
+    global_log_file = target / "media_organizer.log"
+
+    global month_log_file_backup_created
+    month_log_file_backup_created = False
+
+    # Check and backup existing log file
+    if global_log_file.exists():
+        backup_existing_log(global_log_file)
+        global_log_file.unlink()
+
+    # Create a lock for thread safety
+    lock = threading.Lock()
+
     # Parallelize directory processing
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = []
         for root, _, _ in os.walk(source):
             dir_path = Path(root)
-            future = executor.submit(process_directory, dir_path, target, preview, fallback_to_mtime, remove_duplicates, extract_archives, pwd)
+            future = executor.submit(process_directory_with_lock, dir_path, target, lock, preview, fallback_to_mtime, remove_duplicates, extract_archives, pwd)
             futures.append(future)
         for future in futures:
             future.result()
