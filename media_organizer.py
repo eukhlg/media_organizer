@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Media file extensions
 MEDIA_EXTENSIONS = {
-    'image': ['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp'],
+    'image': ['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'dng'],
     'video': ['mp4', 'mov', 'mpg', 'avi', 'mts', 'm2ts', '3gp', '3g2', 'wmv']
 }
 
@@ -174,6 +174,7 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
     """Processes individual media files, handling metadata extraction and duplicate resolution."""
 
     # Check if source file exists
+    # This is required for multi-threading
     if not src_file.exists():
         print(f"[!] Source file no longer exists: {src_file}")
         return
@@ -249,9 +250,6 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         if not src_file.exists():
             print(f"[!] Source file no longer exists: {src_file}")
             return
-        if not tgt_file.exists():
-            print(f"[!] Target file no longer exists: {tgt_file}")
-            return
         if src_file.stat().st_size != tgt_file.stat().st_size:
             # Different sizes, handle it by renaming
             tgt_file = resolve_conflict(src_file, dest_dir)
@@ -261,8 +259,15 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
             tgt_hash = sha256sum_file(tgt_file)
             if src_hash == tgt_hash:
                 if remove_duplicates:
-                    src_file.unlink()  # Remove duplicate
-                    print(f"[=] Identical: {base_name} (removed)")
+                    # Check if source file exists before unlinking
+                    # This is required for multi-threading
+                    try:
+                        src_file.unlink()
+                        print(f"[=] Identical: {base_name} (removed)")
+                    except FileNotFoundError:
+                        pass
+                    except Exception as e:
+                        print(f"[!] Error removing duplicate: {e}")
                 else:
                     print(f"[=] Identical: {base_name} (skipped)")
                 return
@@ -278,6 +283,8 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         print(f"[+] Would move: {base_name} → {year}/{month}/{tgt_file.name}")
         if thm_file.exists():
             print(f"[+] Would move thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+        if json_file.exists():
+            print(f"[+] Would move JSON: {json_file.name} → {year}/{month}/{json_file.name}")
     else:
         shutil.move(src_file, tgt_file)
         log_move(global_log_file, month_log_file, str(src_file), str(tgt_file))
@@ -286,6 +293,10 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
             shutil.move(thm_file, dest_dir)
             log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
             print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+        if json_file.exists():
+            shutil.move(json_file, dest_dir)
+            log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
+            print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
 
 def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, pwd=None):
     """Main routine to organize media files recursively."""
@@ -305,6 +316,9 @@ def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=F
         if src_file.is_file() and src_file.suffix.lower()[1:] in valid_extensions:
             process_file(src_file, target_dir, preview, fallback_to_mtime, remove_duplicates)
 
+    # Remove empty directories
+    remove_empty_directories(source_dir)
+
 def extract_archives_in_place(folder, log_path, preview, pwd=None):
     """Recursively scans and extracts archives in place."""
     for archive in folder.rglob("*"):
@@ -319,11 +333,24 @@ def extract_archives_in_place(folder, log_path, preview, pwd=None):
                     if extract_archive(archive, archive.parent, pwd):
                         log_move(log_path, log_path, str(archive), f"Unpacked to {archive.parent}")
                         archive.unlink()  # Remove archive file
-                        print(f"[+] Removed archive file: {archive}")
+                        print(f"[x] Removed archive file: {archive}")
                 else:
                     print(f"[~] Would unpack {archive}")
         except Exception as e:
             print(f"[!] Error extracting {archive}: {e}")
+
+def remove_empty_directories(start_path):
+    """
+    Recursively removes empty directories starting from the specified start_path.
+    """
+    for current_dir, dirs, files in os.walk(start_path, topdown=False):
+        # If directory is empty, remove it
+        if not dirs and not files:
+            try:
+                os.rmdir(current_dir)
+                print(f"[x] Removed: {current_dir} (directory is empty)")
+            except OSError as e:
+                print(f"[!] Error removing directory {current_dir}: {e}")
 
 def main():
     if len(sys.argv) < 3:
