@@ -21,8 +21,8 @@ It handles duplicate detection, updates timestamps, and can even extract archive
 - `exiftool` installed and in your system's `PATH`
 - `7z` installed (for archive extraction)
 - Python dependencies:
-- `transliterate`
-- `rarfile`
+  - `transliterate`
+  - `rarfile`
 
 Install dependencies with:
 
