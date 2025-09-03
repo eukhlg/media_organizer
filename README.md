@@ -45,7 +45,8 @@ python media_organizer.py /home/user/DCIM /home/user/OrganizedMedia --fallback-t
 
 ## ⚙️ Options
 
-|--Option--|--Description--|
+| Option   | Description   |
+|----------|---------------|
 |--preview | Preview mode — no files will be moved |
 |--fallback-to-mtime |	Use file modification time if EXIF date is missing |
 |--remove-duplicates |	Remove identical files instead of skipping |
