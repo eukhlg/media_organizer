@@ -47,9 +47,12 @@ def print_usage():
     print("[--preview] - Preview mode, no files will be moved") 
     print("[--fallback-to-mtime] - Use file's mtime if no EXIF date found")
     print("[--remove-duplicates] - Remove duplicate files instead of skipping")
+    print("[--remove-empty-dirs] - Remove empty directories within <source_dir> after processing")
     print("[--extract-archives] - Extract archives before processing. Supports: .zip, .tar, .gz, .tgz, .bz2, .xz, .rar")
-    print("[--password <password>] - Password for encrypted archives")
+    print("[--archive-password <password>] - Password for encrypted archives")
+    print("{--remove-extracted} - Remove archives after successful extraction (use with caution!)")
     print("[--threads <num>] - Number of parallel threads (default: 2 x CPU cores)")
+    print("[--verbose] - Enable verbose output")
 
 def transliterate_ru_to_en(name):
     """Transliterates Cyrillic names to Latin characters."""
@@ -125,19 +128,23 @@ def update_timestamps(file_path, date_str, ext):
         ]
     if ext in MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video']:
         subprocess.run(cmd, capture_output=True)
-        print(f"[+] Updated EXIF timestamps for {file_path}")
+        if verbose:
+            print(f"[+] Updated EXIF timestamps for {file_path}")
     os.utime(file_path, (datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp(),) * 2)
-    print(f"[+] Updated filesystem timestamps for {file_path}")
+    if verbose:
+        print(f"[+] Updated filesystem timestamps for {file_path}")
 
 def correct_timestamps(file_path, date_str, ext):
     """Corrects EXIF timestamps using exiftool and updates filesystem timestamps."""
     # Get current file modification date
     current_date_str = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[~] Current timestamps for {file_path}: {current_date_str}, EXIF date: {date_str}")
-    if date_str != current_date_str:
+    if verbose:
+        print(f"[~] Current timestamps for {file_path}: {current_date_str}, EXIF date: {date_str}")
+    if date_str[:10] != current_date_str[:10]: # Only update if dates differ
         update_timestamps(file_path, date_str, ext)
     else:
-        print(f"[=] Timestamps already correct for {file_path}")
+        if verbose:    
+            print(f"[=] Timestamps already correct (dates match) for {file_path}")
 
 def log_move(global_log_path, month_log_path, src, dst):
     """Logs file movement details to both global and monthly logs."""
@@ -163,7 +170,8 @@ def extract_archive_with_password(archive_path, output_folder, pwd=None):
         
         if proc.returncode != 0 and "Wrong password" in stderr:
             if pwd is None:
-                print(f"[!] Archive {archive_path} requires a password.")
+                if verbose:
+                    print(f"[!] Archive {archive_path} requires a password.")
             else:
                 print(f"[!] Wrong password provided for {archive_path}, skipping.")
             return False
@@ -181,7 +189,8 @@ def extract_archive(archive_path, output_folder, pwd=None):
             if pwd is None:
                 pwd = getpass.getpass(f"Enter password for {archive_path}: ")
             else:
-                print(f"[!] Retrying with provided password for {archive_path}")
+                if verbose:
+                    print(f"[!] Retrying with provided password for {archive_path}")
             return extract_archive_with_password(archive_path, output_folder, pwd)
         return True
     except Exception as e:
@@ -204,7 +213,7 @@ def backup_existing_log(log_path):
             break
         i += 1
 
-def extract_archives_in_place(folder, log_path, preview, pwd=None):
+def extract_archives_in_place(folder, log_path, preview, pwd=None, remove_extracted=False):
     """Recursively scans and extracts archives in place."""
     for archive in folder.rglob("*"):
         if not archive.is_file():
@@ -217,8 +226,10 @@ def extract_archives_in_place(folder, log_path, preview, pwd=None):
                     print(f"[~] Unpacking {archive}...")
                     if extract_archive(archive, archive.parent, pwd):
                         log_move(log_path, log_path, str(archive), f"Unpacked to {archive.parent}")
-                        archive.unlink()  # Remove archive file
-                        print(f"[x] Removed archive file: {archive}")
+                        if remove_extracted:
+                            archive.unlink()  # Remove archive file
+                            if verbose:
+                                print(f"[x] Removed archive file: {archive}")
                 else:
                     print(f"[~] Would unpack {archive}")
         except Exception as e:
@@ -238,7 +249,7 @@ def remove_empty_directories(start_path):
                 print(f"[!] Error removing directory {current_dir}: {e}")
 
 
-def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
+def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, remove_extracted=False):
     """Processes individual media files, handling metadata extraction and duplicate resolution."""
 
     global global_log_file
@@ -264,30 +275,37 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
             methods_used.append("EXIF")
         # Check for associated JSON metadata
         elif json_file.exists():
-            print(f"[!] No date found for {src_file}, falling back to JSON file")
+            if verbose:
+                print(f"[!] No date found for {src_file}, falling back to JSON file")
             json_date = parse_json_metadata(json_file)
             if json_date:
                 exif_date = json_date
                 methods_used.append("JSON")
-                print(f"[+] Using JSON date for {src_file}: {exif_date}")
+                if verbose:
+                    print(f"[+] Using JSON date for {src_file}: {exif_date}")
         # Check for associated thumbnail metadata
         elif thm_file.exists():
-            print(f"[!] No date found for {src_file}, falling back to thumbnail file")
+            if verbose:
+                print(f"[!] No date found for {src_file}, falling back to thumbnail file")
             thm_date = get_exif_date(thm_file, 'CreateDate')
             if thm_date:
                 exif_date = thm_date
                 methods_used.append("THM")
-                print(f"[+] Using THM date for {src_file}: {exif_date}")
+                if verbose:
+                    print(f"[+] Using THM date for {src_file}: {exif_date}")
         # Check filename pattern matching
         elif filename_date:
-            print(f"[!] No date found for {src_file}, falling back to filename date")
+            if verbose:
+                print(f"[!] No date found for {src_file}, falling back to filename date")
             exif_date = filename_date
             methods_used.append("Filename")
-            print(f"[+] Using filename date for {src_file}: {exif_date}")
+            if verbose:
+                print(f"[+] Using filename date for {src_file}: {exif_date}")
         # Fall back to file's last modified time if needed
         else:
             if fallback_to_mtime:
-                print(f"[!] No date found for {src_file}, falling back to mtime")
+                if verbose:
+                    print(f"[!] No date found for {src_file}, falling back to mtime")
                 exif_date = datetime.fromtimestamp(src_file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
                 methods_used.append("FALLBACK (MTIME)")
             else:
@@ -341,9 +359,11 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         if preview:
             print(f"[+] Would move: {base_name} → {year}/{month}/{tgt_file.name}")
             if thm_file.exists():
-                print(f"[+] Would move thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+                if verbose:
+                    print(f"[+] Would move thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
             if json_file.exists():
-                print(f"[+] Would move JSON: {json_file.name} → {year}/{month}/{json_file.name}")
+                if verbose:
+                    print(f"[+] Would move JSON: {json_file.name} → {year}/{month}/{json_file.name}")
         else:
             if src_file.exists():
                 shutil.move(src_file, tgt_file)
@@ -354,12 +374,14 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
                 shutil.move(thm_file, dest_dir)
                 correct_timestamps(dest_dir / thm_file.name, exif_date, thm_file.suffix.lower()[1:])
                 log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
-                print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+                if verbose:
+                    print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
             if json_file.exists():
                 shutil.move(json_file, dest_dir)
                 correct_timestamps(dest_dir / json_file.name, exif_date, json_file.suffix.lower()[1:])
                 log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
-                print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
+                if verbose:
+                    print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
     except Exception as e:
         print(f"[!] Error processing file {src_file}: {e}")
 
@@ -375,14 +397,18 @@ def main():
     fallback_to_mtime = '--fallback-to-mtime' in sys.argv
     remove_duplicates = '--remove-duplicates' in sys.argv
     extract_archives = '--extract-archives' in sys.argv
+    remove_extracted = '--remove-extracted' in sys.argv
+    remove_empty_dirs = '--remove-empty-dirs' in sys.argv
+    global verbose
+    verbose = '--verbose' in sys.argv # Enable verbose output if specified
 
 
-    if '--password' in sys.argv:
-        pwd_index = sys.argv.index('--password') + 1
+    if '--archive-password' in sys.argv:
+        pwd_index = sys.argv.index('--archive-password') + 1
         if pwd_index < len(sys.argv):
             pwd = sys.argv[pwd_index]
         else:
-            print("Error: No password provided after --password")
+            print("Error: No password provided after --archive-password")
             sys.exit(1)
     else:
         pwd = None
@@ -423,7 +449,7 @@ def main():
 
     # Extract archives before scanning files
     if extract_archives:
-        extract_archives_in_place(source, global_log_file, preview, pwd)
+        extract_archives_in_place(source, global_log_file, preview, pwd, remove_extracted)
 
     # Build file list and process files in parallel
     valid_extensions = set(MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video'])
@@ -436,7 +462,7 @@ def main():
             future.result()
 
     # Clean up empty directories
-    if not preview:
+    if not preview and remove_empty_dirs:
         remove_empty_directories(source)
 
 if __name__ == "__main__":
