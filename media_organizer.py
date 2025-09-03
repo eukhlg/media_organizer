@@ -115,8 +115,21 @@ def update_timestamps(file_path, date_str, ext):
             f'-FileCreateDate<CreateDate',
             str(file_path),
         ]
-    subprocess.run(cmd, capture_output=True)
+    if ext in MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video']:
+        subprocess.run(cmd, capture_output=True)
+        print(f"[+] Updated EXIF timestamps for {file_path}")
     os.utime(file_path, (datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S').timestamp(),) * 2)
+    print(f"[+] Updated filesystem timestamps for {file_path}")
+
+def correct_timestamps(file_path, date_str, ext):
+    """Corrects EXIF timestamps using exiftool and updates filesystem timestamps."""
+    # Get current file modification date
+    current_date_str = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[~] Current timestamps for {file_path}: {current_date_str}, EXIF date: {date_str}")
+    if date_str != current_date_str:
+        update_timestamps(file_path, date_str, ext)
+    else:
+        print(f"[=] Timestamps already correct for {file_path}")
 
 def log_move(global_log_path, month_log_path, src, dst):
     """Logs file movement details to both global and monthly logs."""
@@ -276,6 +289,7 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         if not exif_date or not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$', exif_date):
             print(f"[!] Invalid or missing date for {src_file}, skipping.")
             return
+
         # Create destination paths
         year, month = exif_date.split('-')[:2]
         dest_dir = target_root / year / month
@@ -325,14 +339,17 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         else:
             if src_file.exists():
                 shutil.move(src_file, tgt_file)
+                correct_timestamps(tgt_file, exif_date, ext)
                 log_move(global_log_file, month_log_file, str(src_file), str(tgt_file))
                 print(f"[+] Moved: {base_name} → {year}/{month}/{tgt_file.name}")
             if thm_file.exists():
                 shutil.move(thm_file, dest_dir)
+                correct_timestamps(dest_dir / thm_file.name, exif_date, thm_file.suffix.lower()[1:])
                 log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
                 print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
             if json_file.exists():
                 shutil.move(json_file, dest_dir)
+                correct_timestamps(dest_dir / json_file.name, exif_date, json_file.suffix.lower()[1:])
                 log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
                 print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
     except Exception as e:
@@ -393,8 +410,9 @@ def main():
         for future in futures:
             future.result()
 
-    remove_empty_directories(source)
-
+    # Clean up empty directories
+    if not preview:
+        remove_empty_directories(source)
 
 if __name__ == "__main__":
     main()
