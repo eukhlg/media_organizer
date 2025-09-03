@@ -97,15 +97,11 @@ The tool tries to determine the best available date for sorting media:
 4.	Filename pattern — detects YYYYMMDD_HHMMSS
 5.	File modification time (if --fallback-to-mtime is used)
 
-
-
-🌐 Transliteration
+## 🌐 Transliteration
 
 Cyrillic filenames are automatically converted to Latin (e.g., Пример.jpg → Primer.jpg) to improve cross-platform compatibility.
 
-
-
-🧼 Timestamps Fix
+## 🧼 Timestamps Fix
 
 If EXIF or derived date differs from filesystem dates, the script will update:
 - EXIF DateTimeOriginal or CreateDate
@@ -113,9 +109,7 @@ If EXIF or derived date differs from filesystem dates, the script will update:
 
 This ensures consistent and accurate metadata.
 
----
-
-🧪 Preview Mode
+## 🧪 Preview Mode
 
 Add --preview to safely test the script before moving anything:
 
@@ -123,36 +117,25 @@ Add --preview to safely test the script before moving anything:
 python media_organizer.py ~/Downloads ~/Organized --preview --verbose
 ```
 
----
-
-🔐 Tips for Archive Handling
+## 🔐 Tips for Archive Handling
 - Use --extract-archives to scan and extract .zip, .rar, etc. before sorting
 - Add --remove-extracted to delete archive files after successful extraction
 - Combine with --archive-password to prefill credentials
 
----
-
-🧹 Clean-Up Mode
+## 🧹 Clean-Up Mode
 
 To remove all empty directories after processing (use with care):
 
 --remove-empty-dirs
 
-
----
-
-📞 Support & Contribution
+## 📞 Support & Contribution
 
 This project was created as a personal tool but is open to feedback, suggestions, and improvements.
 Feel free to fork, adapt, or share it — just credit the original author.
 
----
-
-📜 License
+## 📜 License
 
 MIT License — free for personal and commercial use.
-
----
 
 Happy organizing! 🎉
 
