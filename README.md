@@ -1,10 +1,8 @@
----
 # 📁 Media Organizer
 
 **Media Organizer** is a powerful and flexible Python tool that organizes your photos and videos into a structured folder hierarchy (`<target>/YYYY/MM/`) based on their metadata (EXIF, JSON, filenames, etc.).  
 It handles duplicate detection, updates timestamps, and can even extract archives — all with multithreading support for speed!
 
----
 ## 🚀 Features
 
 - 📅 Organizes files by date (`Year/Month`) based on EXIF, JSON metadata, filenames, or modification times
@@ -17,7 +15,6 @@ It handles duplicate detection, updates timestamps, and can even extract archive
 - 🧹 Optionally cleans up empty directories after processing
 - 🔍 Preview mode to test everything before touching your files
 
----
 ## 🧑‍💻 Requirements
 
 - Python 3.7+
@@ -36,9 +33,7 @@ pip install transliterate rarfile
 Make sure exiftool and 7z (or 7za) are accessible from your command line.
 Windows users can install ExifTool and 7-Zip.
 
----
-
-🧾 Usage
+##  🧾 Usage
 ```bash
 python media_organizer.py <source_dir> <target_dir> [OPTIONS]
 ```
@@ -48,36 +43,33 @@ python media_organizer.py /home/user/DCIM /home/user/OrganizedMedia --fallback-t
 ```
 ---
 
-⚙️ Options
+## ⚙️ Options
 
 |--Option--|--Description--|
-|--preview | Preview mode — no files will be moved
-|--fallback-to-mtime |	Use file modification time if EXIF date is missing
-|--remove-duplicates |	Remove identical files instead of skipping
-|--remove-empty-dirs |	Clean up empty directories in the source folder
-|--extract-archives |	Extract supported archives before processing
-|--archive-password <password>	| Use a preset password for encrypted archives
-|--remove-extracted	| Delete archive files after successful extraction
-|--threads <num> | Number of parallel threads (default: 2 × CPU cores)
-|--verbose	| Enable detailed output
+|--preview | Preview mode — no files will be moved |
+|--fallback-to-mtime |	Use file modification time if EXIF date is missing |
+|--remove-duplicates |	Remove identical files instead of skipping |
+|--remove-empty-dirs |	Clean up empty directories in the source folder |
+|--extract-archives |	Extract supported archives before processing |
+|--archive-password <password>	| Use a preset password for encrypted archives |
+|--remove-extracted	| Delete archive files after successful extraction |
+|--threads <num> | Number of parallel threads (default: 2 × CPU cores) |
+|--verbose	| Enable detailed output |
 
----
 
-🗂️ Archive Support
+## 🗂️ Archive Support
 
 This tool can extract the following archive types:
-	•	.zip
-	•	.rar
-	•	.tar
-	•	.gz, .tgz
-	•	.bz2
-	•	.xz
+- .zip
+- .rar
+- .tar
+- .gz, .tgz
+- .bz2
+- .xz
 
 Password-protected archives are supported using --archive-password. If omitted, the script will prompt you interactively.
 
----
-
-🛡️ Duplicate Handling
+## 🛡️ Duplicate Handling
 
 If a file with the same name already exists:
 - If sizes differ → file is renamed and moved to conflicts/
@@ -87,9 +79,7 @@ If a file with the same name already exists:
   - Deleted if --remove-duplicates is used
   - Skipped otherwise
 
----
-
-📑 Logging
+## 📑 Logging
 
 All operations are logged to:
 - media_organizer.log in the target directory
@@ -97,24 +87,22 @@ All operations are logged to:
 
 If logs already exist, they will be safely backed up as media_organizer.log.1, .2, etc.
 
----
-
-🧠 Date Detection Strategy
+## 🧠 Date Detection Strategy
 
 The tool tries to determine the best available date for sorting media:
-	1.	EXIF — DateTimeOriginal (images) or CreateDate (videos)
-	2.	Associated JSON — looks for photoTakenTime.timestamp
-	3.	Associated THM file (for some video formats)
-	4.	Filename pattern — detects YYYYMMDD_HHMMSS
-	5.	File modification time (if --fallback-to-mtime is used)
+1.	EXIF — DateTimeOriginal (images) or CreateDate (videos)
+2.	Associated JSON — looks for photoTakenTime.timestamp
+3.	Associated THM file (for some video formats)
+4.	Filename pattern — detects YYYYMMDD_HHMMSS
+5.	File modification time (if --fallback-to-mtime is used)
 
----
+
 
 🌐 Transliteration
 
 Cyrillic filenames are automatically converted to Latin (e.g., Пример.jpg → Primer.jpg) to improve cross-platform compatibility.
 
----
+
 
 🧼 Timestamps Fix
 
