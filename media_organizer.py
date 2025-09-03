@@ -32,6 +32,11 @@ ARCHIVE_TYPES = {
     '.rar': rarfile.RarFile
 }
 
+# Thread-safe logging lock and log backup tracker
+log_lock = threading.Lock()
+backed_up_logs = set()
+
+
 def print_usage():
     """Prints usage instructions."""
     print("Usage: script.py <source_dir> <target_dir> [--preview] [--fallback-to-mtime] [--remove-duplicates] [--extract-archives] [--password <password>]")
@@ -64,9 +69,7 @@ def get_exif_date(file_path, tag):
 def parse_json_metadata(json_file):
     """
     Parses JSON metadata to retrieve the photo taken time from the 'timestamp'.
-    
-    :param json_file: Path to the JSON file containing metadata.
-    :return: Formatted date-time string or None if not found.
+    Returns formatted date string or None if not found.
     """
     try:
         with open(json_file, 'r') as jf:
@@ -118,10 +121,11 @@ def update_timestamps(file_path, date_str, ext):
 def log_move(global_log_path, month_log_path, src, dst):
     """Logs file movement details to both global and monthly logs."""
     entry = f"{datetime.now().isoformat()} | {src} -> {dst}\n"
-    with open(global_log_path, 'a') as g:
-        g.write(entry)
-    with open(month_log_path, 'a') as m:
-        m.write(entry)
+    with log_lock:
+        with open(global_log_path, 'a') as g:
+            g.write(entry)
+        with open(month_log_path, 'a') as m:
+            m.write(entry)
 
 def extract_archive_with_password(archive_path, output_folder, pwd=None):
     """Extracts an archive using 7z tool, controlling interactive behavior."""
@@ -157,12 +161,8 @@ def extract_archive(archive_path, output_folder, pwd=None):
                 pwd = getpass.getpass(f"Enter password for {archive_path}: ")
             else:
                 print(f"[!] Retrying with provided password for {archive_path}")
-            if extract_archive_with_password(archive_path, output_folder, pwd):
-                print(f"[+] Successfully extracted {archive_path} with provided password.")
-                return True
-            else:
-                print(f"[!] Failed to extract {archive_path} with provided password.")
-                return False
+            return extract_archive_with_password(archive_path, output_folder, pwd)
+        return True
     except Exception as e:
         print(f"[!] Extraction failed: {e}")
         return False
@@ -216,33 +216,11 @@ def remove_empty_directories(start_path):
             except OSError as e:
                 print(f"[!] Error removing directory {current_dir}: {e}")
 
-def process_directory(source_dir, target_dir, preview=False, fallback_to_mtime=False, remove_duplicates=False, extract_archives=False, pwd=None):
-    """Main routine to organize media files recursively."""
-
-    # Process archives first
-    if extract_archives:
-        extract_archives_in_place(source_dir, global_log_file, preview, pwd)
-
-    # Walk through directories and process each media file
-    valid_extensions = set(MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video'])
-    for src_file in source_dir.rglob('*'):
-        if src_file.is_file() and src_file.suffix.lower()[1:] in valid_extensions:
-            process_file(src_file, target_dir, preview, fallback_to_mtime, remove_duplicates)
-
-    # Remove empty directories
-    remove_empty_directories(source_dir)
-
-def process_directory_with_lock(source_dir, target_dir, lock, *args):
-    """Processes a directory with thread safety using a lock."""
-    # Lock used to ensure thread safety
-    with lock:
-        process_directory(source_dir, target_dir, *args)
 
 def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, remove_duplicates=False):
     """Processes individual media files, handling metadata extraction and duplicate resolution."""
 
     global global_log_file
-    global month_log_file_backup_created
 
     ext = src_file.suffix.lower()[1:]
     base_name = src_file.name
@@ -298,29 +276,23 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
         if not exif_date or not re.match(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$', exif_date):
             print(f"[!] Invalid or missing date for {src_file}, skipping.")
             return
-
-    except Exception as e:
-        print(f"[!] Error processing file {src_file}: {e}")
-        return
-
-    try:
         # Create destination paths
         year, month = exif_date.split('-')[:2]
         dest_dir = target_root / year / month
         dest_dir.mkdir(parents=True, exist_ok=True)
         month_log_file = dest_dir / "media_organizer.log"
-
         # Target file path setup
         tgt_file = dest_dir / base_name
         if re.search(r'[А-Яа-я]', base_name):
             tgt_file = dest_dir / transliterate_ru_to_en(base_name)
 
-        # Backup existing log file if present
-        if month_log_file.exists() and not month_log_file_backup_created:
-            backup_existing_log(month_log_file)
-            month_log_file.unlink()
-            month_log_file_backup_created = True
-
+        # Backup log once per month safely
+        month_key = f"{year}-{month}"
+        with log_lock:
+            if month_key not in backed_up_logs and month_log_file.exists():
+                backup_existing_log(month_log_file)
+                month_log_file.unlink()
+                backed_up_logs.add(month_key)
         # Resolve potential duplicate file issues
         if tgt_file.exists():
             if src_file.stat().st_size != tgt_file.stat().st_size:
@@ -343,37 +315,29 @@ def process_file(src_file, target_root, preview=False, fallback_to_mtime=False, 
                     new_name = f"{src_file.stem}_copy_{suffix}{src_file.suffix}"
                     tgt_file = dest_dir / new_name
                     print(f"[!] Conflict: {base_name} → {new_name}")
-    except Exception as e:
-        print(f"[!] Error creating file path: {e}")
-        return
 
-    # print(f"Constructed JSON file name: {json_file}, exists: {json_file.exists()}")
-
-    try:
-        # Move or simulate move operation
         if preview:
-            if base_name and tgt_file:
-                print(f"[+] Would move: {base_name} → {year}/{month}/{tgt_file.name}")
+            print(f"[+] Would move: {base_name} → {year}/{month}/{tgt_file.name}")
             if thm_file.exists():
                 print(f"[+] Would move thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
             if json_file.exists():
                 print(f"[+] Would move JSON: {json_file.name} → {year}/{month}/{json_file.name}")
         else:
-                if base_name and src_file.exists() and tgt_file:
-                    shutil.move(src_file, tgt_file)
-                    log_move(global_log_file, month_log_file, str(src_file), str(tgt_file))
-                    print(f"[+] Moved: {base_name} → {year}/{month}/{tgt_file.name}")
-                if thm_file.exists():
-                    shutil.move(thm_file, dest_dir)
-                    log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
-                    print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
-                if json_file.exists():
-                    shutil.move(json_file, dest_dir)
-                    log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
-                    print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
+            if src_file.exists():
+                shutil.move(src_file, tgt_file)
+                log_move(global_log_file, month_log_file, str(src_file), str(tgt_file))
+                print(f"[+] Moved: {base_name} → {year}/{month}/{tgt_file.name}")
+            if thm_file.exists():
+                shutil.move(thm_file, dest_dir)
+                log_move(global_log_file, month_log_file, str(thm_file), str(dest_dir / thm_file.name))
+                print(f"[+] Moved thumbnail: {thm_file.name} → {year}/{month}/{thm_file.name}")
+            if json_file.exists():
+                shutil.move(json_file, dest_dir)
+                log_move(global_log_file, month_log_file, str(json_file), str(dest_dir / json_file.name))
+                print(f"[+] Moved JSON: {json_file.name} → {year}/{month}/{json_file.name}")
     except Exception as e:
-        print(f"[!] Error moving file {src_file}: {e}")
-        return
+        print(f"[!] Error processing file {src_file}: {e}")
+
 
 def main():
     if len(sys.argv) < 3:
@@ -408,30 +372,29 @@ def main():
 
     target.mkdir(parents=True, exist_ok=True)
 
-        # Set up global log file
+    # Set up global log file
     global global_log_file
     global_log_file = target / "media_organizer.log"
-
-    global month_log_file_backup_created
-    month_log_file_backup_created = False
-
-    # Check and backup existing log file
     if global_log_file.exists():
         backup_existing_log(global_log_file)
         global_log_file.unlink()
 
-    # Create a lock for thread safety
-    lock = threading.Lock()
+    # Extract archives before scanning files
+    if extract_archives:
+        extract_archives_in_place(source, global_log_file, preview, pwd)
 
-    # Parallelize directory processing
+    # Build file list and process files in parallel
+    valid_extensions = set(MEDIA_EXTENSIONS['image'] + MEDIA_EXTENSIONS['video'])
+    all_files = list(source.rglob('*'))
+    media_files = [f for f in all_files if f.is_file() and f.suffix.lower()[1:] in valid_extensions]
+
     with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = []
-        for root, _, _ in os.walk(source):
-            dir_path = Path(root)
-            future = executor.submit(process_directory_with_lock, dir_path, target, lock, preview, fallback_to_mtime, remove_duplicates, extract_archives, pwd)
-            futures.append(future)
+        futures = [executor.submit(process_file, f, target, preview, fallback_to_mtime, remove_duplicates) for f in media_files]
         for future in futures:
             future.result()
+
+    remove_empty_directories(source)
+
 
 if __name__ == "__main__":
     main()
