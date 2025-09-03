@@ -39,9 +39,17 @@ backed_up_logs = set()
 
 def print_usage():
     """Prints usage instructions."""
-    print("Usage: script.py <source_dir> <target_dir> [--preview] [--fallback-to-mtime] [--remove-duplicates] [--extract-archives] [--password <password>]")
     print("Organizes media files based on EXIF or extracted metadata into <target>/YYYY/MM/")
     print("Duplicates are handled by comparing hashes.")
+    print('')
+    print("Usage: script.py <source_dir> <target_dir> [OPTIONS]")
+    print("Options:")
+    print("[--preview] - Preview mode, no files will be moved") 
+    print("[--fallback-to-mtime] - Use file's mtime if no EXIF date found")
+    print("[--remove-duplicates] - Remove duplicate files instead of skipping")
+    print("[--extract-archives] - Extract archives before processing. Supports: .zip, .tar, .gz, .tgz, .bz2, .xz, .rar")
+    print("[--password <password>] - Password for encrypted archives")
+    print("[--threads <num>] - Number of parallel threads (default: 2 x CPU cores)")
 
 def transliterate_ru_to_en(name):
     """Transliterates Cyrillic names to Latin characters."""
@@ -368,6 +376,7 @@ def main():
     remove_duplicates = '--remove-duplicates' in sys.argv
     extract_archives = '--extract-archives' in sys.argv
 
+
     if '--password' in sys.argv:
         pwd_index = sys.argv.index('--password') + 1
         if pwd_index < len(sys.argv):
@@ -377,6 +386,21 @@ def main():
             sys.exit(1)
     else:
         pwd = None
+    
+    # Determine number of threads
+    threads = os.cpu_count() * 2
+    if '--threads' in sys.argv:
+        try:
+            t_index = sys.argv.index('--threads') + 1
+            if t_index < len(sys.argv):
+                threads = int(sys.argv[t_index])
+                if threads < 1:
+                    raise ValueError
+            else:
+                raise ValueError
+        except ValueError:
+            print("Error: Invalid number of threads specified after --threads")
+            sys.exit(1)
 
     if not source.is_dir():
         print(f"Source directory does not exist: {source}")
@@ -384,6 +408,7 @@ def main():
 
     print(f"Source: {source}")
     print(f"Target: {target}")
+    print(f"Threads: {threads}")
     if preview:
         print("[PREVIEW MODE — No files will be moved]")
 
@@ -405,7 +430,7 @@ def main():
     all_files = list(source.rglob('*'))
     media_files = [f for f in all_files if f.is_file() and f.suffix.lower()[1:] in valid_extensions]
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = [executor.submit(process_file, f, target, preview, fallback_to_mtime, remove_duplicates) for f in media_files]
         for future in futures:
             future.result()
